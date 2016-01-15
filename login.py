@@ -5,6 +5,7 @@ import sys
 import time
 import struct
 import hashlib
+from urllib.parse import quote as urlencode
 
 # To speed up start time load some modules only as needed
 
@@ -65,6 +66,8 @@ def token_message(username, secret, validsec):
         time.strftime("%c %Z(%z)", time.gmtime(time_next_end)))
     message += "\nRequested by: {} for: {} on: {}".format(
         os.getenv("IP"), ascii(os.getenv("URI")), os.getenv("HTTP_HOST"))
+    message += "\nhttps://{}:{}@{}{}".format(urlencode(username),
+        token, os.getenv("HTTP_HOST"), urlencode(os.getenv("URI")))
     return message
 
 
