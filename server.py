@@ -6,6 +6,7 @@ import argparse
 import functions
 import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 
 logging.basicConfig(level=logging.INFO)
 
@@ -19,6 +20,10 @@ def send_token(conf, username, orig_uri):
         print(message)
     else:
         functions.send_message(conf.jid, conf.password, username, message)
+
+
+class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
+    pass
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -38,6 +43,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         LAST_REQUEST_TIME = time.time()
                         send_token(conf, username, self.headers['X-Original-URI'])
                         self.send_response(401, "Token sent, retry")
+                        self.send_header("WWW-Authenticate", "Basic realm=\"xmppmessage auth\"")
                     else:
                         self.send_response(429, 'Too Many Requests')
                 else:
@@ -47,7 +53,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         self.send_response(200, "OK go forward")
                     else:
                         logging.info("Denied %s", username)
-                        self.send_response(401, "Authentication failed, username or password wrong")
+                        self.send_response(403, "Authentication failed, username or password wrong")
         else:
             self.send_response(401)
             self.send_header("WWW-Authenticate", "Basic realm=\"xmppmessage auth\"")
