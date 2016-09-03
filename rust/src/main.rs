@@ -1,17 +1,18 @@
 use std::env;
 use std::collections::HashSet;
 use std::iter::repeat;
-use std::sync::mpsc::channel;
+use std::sync::Arc;
+use std::thread;
 
-extern crate base64;
 extern crate crypto;
-extern crate civet;
-extern crate conduit;
+extern crate env_logger;
 extern crate getopts;
+#[macro_use] extern crate log;
+extern crate tiny_http;
 extern crate time;
 extern crate rand;
+extern crate rustc_serialize;
 
-use civet::{Config, Server};
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 use getopts::Options;
@@ -28,6 +29,8 @@ fn print_usage(program: &str, opts: Options) {
 }
 
 fn main() {
+    env_logger::init().unwrap();
+
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
     let mut opts = Options::new();
@@ -50,7 +53,6 @@ fn main() {
         panic!("Missing jid or password");
     }
 
-    let mut server_config = Config::new();
     let usernames = matches.opt_strs("u").into_iter().collect::<HashSet<String>>();
     let mut hasher = Sha1::new();
     let mut secret: Vec<u8> = repeat(0).take((hasher.output_bits() + 7) / 8).collect();
@@ -62,18 +64,35 @@ fn main() {
         println!("No secret (-s/--secret) given, using random value");
         thread_rng().fill_bytes(&mut secret);
     });
+    let secret = secret.into_iter().take(16).collect::<Vec<u8>>();
     let validity: i64 = matches.opt_str("t").unwrap_or(String::from("48")).parse()
         .unwrap_or_else(|_| { panic!("Failed to parse time") });
-    server_config.port(matches.opt_str("o").unwrap_or(String::from("8080")).parse()
-        .unwrap_or_else(|_| { panic!("Failed to parse port number") }));
-
+    let port = matches.opt_str("o").unwrap_or(String::from("8080")).parse()
+        .unwrap_or_else(|_| { panic!("Failed to parse port number") });
 
     let handler = handler::AuthHandler::make(matches.opt_str("j").unwrap(),
                                              matches.opt_str("p").unwrap(),
                                              usernames,
                                              time::Duration::hours(validity),
                                              secret);
-    let _a = Server::start(server_config, handler);
-    let (_tx, rx) = channel::<()>();
-    rx.recv().unwrap();
+    let handler = Arc::new(handler);
+    let server = Arc::new(tiny_http::Server::http(("0.0.0.0", port)).unwrap());
+
+    let mut handles = Vec::new();
+
+    for _ in 0..2 {
+        let server = server.clone();
+        let handler = handler.clone();
+        handles.push(thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let mut log = apachelog::LogEntry::start(&request);
+                let response = handler.call(&request);
+                log.done(&response);
+                let _ = request.respond(response);
+            }
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
 }

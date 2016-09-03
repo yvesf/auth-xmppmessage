@@ -5,13 +5,14 @@ authors = ["Yves Fischer <yvesf+git@xapek.org>"]
 build = "build.rs"
 
 [dependencies]
-conduit = "0.7.4"
-civet = "0.8.3"
-time = "0.1.35"
-base64 = "0.2.1"
-rust-crypto = "0.2.36"
+tiny_http = "0.5"
+rustc-serialize = "0.3"
+time = "0.1"
+rust-crypto = "0.2"
 rand = "0.3"
 getopts = "0.2"
+env_logger = "0.3"
+log = "0.3"
 
 [build-dependencies]
 gcc = "0.3.35"

@@ -1,7 +1,9 @@
 ///! Prints logging similar to apache http access.log
 use std::net::IpAddr;
-use conduit::{Request, Response};
+use std::io::Read;
+
 use time;
+use tiny_http::{Request, Response};
 
 pub struct LogEntry {
     remote_ip_address: IpAddr,
@@ -17,7 +19,7 @@ impl LogEntry {
         let entry = LogEntry {
             remote_ip_address: req.remote_addr().ip(),
             remote_user: String::new(),
-            request_path: String::from(req.path()),
+            request_path: String::from(req.url()),
             time: time::now(),
             status: 0,
             response_size: 0,
@@ -25,21 +27,19 @@ impl LogEntry {
         return entry
     }
 
-    pub fn done(&mut self, response: Response) ->  Response {
-        let (status_code, _) = response.status;
-        self.status = status_code;
+    pub fn done<R>(&mut self, _: &Response<R>) where R: Read {
+        self.status = 0; // not accessible
         self.print();
-        return response;
     }
 
     #[inline(always)]
     fn print(&self) {
         println!("{} - {} - [{}] \"{}\" {} {}",
-                 self.remote_ip_address,
-                 self.remote_user,
-                 time::strftime("%d/%b/%Y %T %z", &self.time).unwrap(),
-                 self.request_path,
-                 self.status,
-                 self.response_size);
+              self.remote_ip_address,
+              self.remote_user,
+              time::strftime("%d/%b/%Y %T %z", &self.time).unwrap(),
+              self.request_path,
+              self.status,
+              self.response_size);
     }
 }
