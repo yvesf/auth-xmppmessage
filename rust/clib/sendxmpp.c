@@ -1,4 +1,6 @@
 #include <strophe.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 struct message {
   const char * to;
@@ -51,8 +53,7 @@ void send_message(const char * jid,
     msg->to = to;
     msg->message = message;
 
-    // TODO: Wait for version 0.8.9
-//    long flags = XMPP_CONN_FLAG_MANDATORY_TLS;
+    long flags = XMPP_CONN_FLAG_MANDATORY_TLS;
 
     /* init library */
     xmpp_initialize();
@@ -65,8 +66,7 @@ void send_message(const char * jid,
     conn = xmpp_conn_new(ctx);
 
     /* configure connection properties (optional) */
-    // TODO: Wait for version 0.8.9
-//    xmpp_conn_set_flags(conn, flags);
+    xmpp_conn_set_flags(conn, flags);
 
     /* setup authentication information */
     xmpp_conn_set_jid(conn, jid);
