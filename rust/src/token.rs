@@ -21,15 +21,17 @@ impl TokenGenerator {
         }
     }
 
-    pub fn generate_token(&self, username: &str, at_time: i64) -> (i64, String) {
+    /// Return (from, to, token)
+    pub fn generate_token(&self, username: &str, at_time: i64) -> (i64, i64, String) {
         let timeslot = at_time - (at_time % self.valid_duration_secs);
         let input: String = format!("{}{}", username, timeslot);
-        return (timeslot + self.valid_duration_secs, self.make_hash_token(&input.as_bytes()))
+        return (timeslot, timeslot + self.valid_duration_secs, self.make_hash_token(&input.as_bytes()))
     }
 
-    pub fn generate_token_norm(&self, username: &str, at_time: i64) -> (i64, String) {
-        let (valid, tok) = self.generate_token(username, at_time);
-        return (valid, normalize_token(tok.as_str()));
+    #[inline(always)]
+    pub fn generate_token_norm(&self, username: &str, at_time: i64) -> (i64, i64, String) {
+        let (valid_from, valid_to, tok) = self.generate_token(username, at_time);
+        return (valid_from, valid_to, normalize_token(tok.as_str()));
     }
 
     fn make_hash_token(&self, input: &[u8]) -> String {
@@ -55,8 +57,7 @@ mod tests {
 
     #[test]
     fn test_normalize_token() {
-        println!("{}", normalize_token(&"7A-74-F4".to_string()));
-        assert!(normalize_token(&"7A-74-F4".to_string()) == "7a74f4");
+        assert_eq!(normalize_token(&"7A-74-F4".to_string()), "7a74f4");
     }
 
     #[test]
@@ -64,8 +65,9 @@ mod tests {
         use time;
         let tg = TokenGenerator::new(time::Duration::hours(2).num_seconds(),
                                      vec!(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16));
-        let (valid_until, result) = tg.generate_token("a", 99999999);
-        assert!( valid_until == 100000800);
-        assert!( result  == "7A-74-F4");
+        let (valid_from, valid_until, result) = tg.generate_token("a", 99999999);
+        assert_eq!( valid_from, 99993600);
+        assert_eq!( valid_until, 100000800);
+        assert_eq!( result, "7A-74-F4");
     }
 }

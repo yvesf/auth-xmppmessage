@@ -28,13 +28,13 @@ impl LogEntry {
     }
 
     pub fn done<R>(&mut self, _: &Response<R>) where R: Read {
-        self.status = 0; // not accessible
+        self.status = 0; // statuscode is not accessible :(
         self.print();
     }
 
     #[inline(always)]
     fn print(&self) {
-        println!("{} - {} - [{}] \"{}\" {} {}",
+        info!("{} - {} - [{}] \"{}\" {} {}",
               self.remote_ip_address,
               self.remote_user,
               time::strftime("%d/%b/%Y %T %z", &self.time).unwrap(),
