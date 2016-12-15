@@ -5,18 +5,19 @@ use std::thread;
 
 extern crate ascii;
 extern crate crypto;
-extern crate env_logger;
 extern crate getopts;
 #[macro_use] extern crate log;
 extern crate tiny_http;
 extern crate time;
 extern crate rand;
 extern crate rustc_serialize;
+extern crate simple_logger;
 
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 use getopts::Options;
 use rand::{thread_rng, Rng};
+use log::LogLevel;
 
 mod apachelog;
 mod handler;
@@ -30,8 +31,6 @@ fn print_usage(program: &str, opts: Options) {
 }
 
 fn main() {
-    env_logger::init().unwrap();
-
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
     let mut opts = Options::new();
@@ -40,6 +39,7 @@ fn main() {
     opts.optopt("s", "secret", "server secret for token generation", "SECRET");
     opts.optopt("t", "time", "Validity of the token in hours (default 48)", "HOURS");
     opts.optopt("o", "port", "TCP Port to listen on", "PORT");
+    opts.optflag("d", "debug", "Use loglevel Debug instead of Warn");
     opts.optflag("n", "nosend", "Don't send XMPP message, just print debug infos");
     opts.optflag("h", "help", "print this help menu");
     let matches = opts.parse(&args[1..]).unwrap_or_else(|f| panic!(f.to_string()));
@@ -53,6 +53,8 @@ fn main() {
         print_usage(&program, opts);
         panic!("Missing jid or password");
     }
+
+    simple_logger::init_with_level(if matches.opt_present("d") { LogLevel::Debug } else { LogLevel::Warn }).unwrap();
 
     let mut hasher = Sha1::new();
     let mut secret: Vec<u8> = repeat(0).take((hasher.output_bits() + 7) / 8).collect();
