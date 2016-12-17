@@ -3,7 +3,7 @@ use std::collections::{HashMap};
 use std::io;
 use std::marker::Sync;
 use std::ops::Add;
-use std::str::from_utf8;
+use std::str;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -37,9 +37,9 @@ pub struct AuthHandler {
 type EmptyResponse = Response<io::Empty>;
 
 // HTTP Statuscodes defined as macro. This way they can be used like literals.
-macro_rules! HTTP_HEADER_AUTHORIZATION { () => (r"Authorization") }
-macro_rules! HTTP_HEADER_X_ALLOWED_JID { () => (r"X-Allowed-Jid") }
-macro_rules! HTTP_HEADER_WWW_AUTHENTICATE { () => (r"WWW-Authenticate") }
+macro_rules! http_header_authorization { () => (r"Authorization") }
+macro_rules! http_header_x_allowed_jid { () => (r"X-Allowed-Jid") }
+macro_rules! http_header_www_authenticate { () => (r"WWW-Authenticate") }
 
 // Finds a header in a `tiny_http::Header` structure.
 macro_rules! get_header {
@@ -74,28 +74,31 @@ impl AuthHandler {
         }
     }
 
-    // Result<(method, username, password), error-message>
     #[inline(always)]
-    fn _get_username_password<'a>(headers: &'a [Header]) -> Result<HeaderInfos, &'static str> {
-        let auth_header = try!(get_header!(headers, HTTP_HEADER_AUTHORIZATION!()));
-        let authorization: &str = auth_header.value.as_str();
-        debug!("{}: {}", HTTP_HEADER_AUTHORIZATION!(), authorization);
-        let mut authorization_split = authorization.split(' ');
-        let method_value = try!(authorization_split.next().ok_or("No method in header value"));
-        let encoded_value = try!(authorization_split.next().ok_or("No username/password value in header value"));
-        let decoded_value = try!(encoded_value.from_base64().or(Err("Failed base64 decode")));
-        let utf8_decoded_value = try!(from_utf8(&decoded_value).or(Err("Failed to decode UTF-8")));
-        let mut username_password_split = utf8_decoded_value.split(':');
-        let username = try!(username_password_split.next().ok_or("No username in header"));
-        let password = try!(username_password_split.next().ok_or("No password in header"));
+    fn _parse_headers<'a>(headers: &'a [Header]) -> Result<HeaderInfos, &'static str> {
+        let auth_header = get_header!(headers, http_header_authorization!())?.value.as_str();
+        debug!("{}: {}", http_header_authorization!(), auth_header);
+        let (auth_method, encoded_cred) = match auth_header.find(' ') {
+            Some(pos) => Ok((auth_header, pos)),
+            None => Err("Failed to split Authorization header")
+        }.map(|(header, pos)| header.split_at(pos))?;
 
-        let allowed_jids_value: &str = try!(get_header!(headers, HTTP_HEADER_X_ALLOWED_JID!())).value.as_str();
-        debug!("{}: {}", HTTP_HEADER_X_ALLOWED_JID!(), allowed_jids_value);
-        let allowed_jids_list: Vec<String> = allowed_jids_value.split(',').map(String::from).collect();
+        let decoded_cred = encoded_cred.from_base64().or(Err("Failed base64 decode of username/password"))?;
+        let (username, password) = str::from_utf8(&decoded_cred).or(Err("Failed to decode UTF-8"))
+            .map(|value| match value.find(':') {
+                Some(pos) => Ok((value, pos)),
+                None => Err("Failed to split username/password")
+            })?
+            .map(|(value, pos)| value.split_at(pos))?;
+
+        let allowed_jids_value = get_header!(headers, http_header_x_allowed_jid!())?.value.as_str();
+        debug!("{}: {}", http_header_x_allowed_jid!(), allowed_jids_value);
+        let allowed_jids_list = allowed_jids_value.split(',').map(String::from).collect();
+
         Ok(HeaderInfos {
             auth_username: String::from(username),
             auth_password: String::from(password),
-            auth_method: String::from(method_value),
+            auth_method: String::from(auth_method),
             allowed_jids: allowed_jids_list,
         })
     }
@@ -104,10 +107,10 @@ impl AuthHandler {
         Ok(Response::new(
             StatusCode(status_code),
             vec![
-                Header {
-                    field: HeaderField::from_bytes(HTTP_HEADER_WWW_AUTHENTICATE!()).unwrap(),
-                    value: AsciiString::from_str(r#"Basic realm="xmppmessage auth""#).unwrap()
-                }
+            Header {
+                field: HeaderField::from_bytes(http_header_www_authenticate!()).unwrap(),
+                value: AsciiString::from_str(r#"Basic realm="xmppmessage auth""#).unwrap()
+            }
             ],
             io::empty(), None, None
         ))
@@ -115,7 +118,7 @@ impl AuthHandler {
 
     fn _call_internal(&self, request: &Request) -> io::Result<EmptyResponse> {
         let current_time = get_time().sec;
-        return match AuthHandler::_get_username_password(request.headers()) {
+        return match AuthHandler::_parse_headers(request.headers()) {
             Ok(headerinfos) => {
                 let is_known_user = headerinfos.allowed_jids.contains(&headerinfos.auth_username);
                 if headerinfos.auth_method != "Basic" {
@@ -238,8 +241,7 @@ impl AuthHandler {
     }
 }
 
-unsafe impl Sync for AuthHandler {
-}
+unsafe impl Sync for AuthHandler {}
 
 #[cfg(test)]
 mod tests {
@@ -250,11 +252,11 @@ mod tests {
     fn test_handler_creation() {
         let handler = AuthHandler::make("jid".to_string(), "pw".to_string(),
                                         TimeDuration::hours(123),
-                                        vec!(1,2,3),
+                                        vec!(1, 2, 3),
                                         true);
         assert_eq!(handler.bot_jid, "jid");
         assert_eq!(handler.bot_password, "pw");
-        assert_eq!(handler.tg.valid_duration_secs, 60*60*123);
+        assert_eq!(handler.tg.valid_duration_secs, 60 * 60 * 123);
         assert_eq!(handler.nosend, true);
     }
 }
