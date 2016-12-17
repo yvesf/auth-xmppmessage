@@ -87,9 +87,7 @@ fn main() {
         let handler = handler.clone();
         threads.push(thread::spawn(move || {
             for request in server.incoming_requests() {
-                let mut log = apachelog::LogEntry::start(&request);
                 let response = handler.call(&request);
-                log.done(&response);
                 let _ = request.respond(response);
             }
         }));

@@ -10,7 +10,7 @@ pub struct LogEntry {
     remote_user: String,
     request_path: String,
     time: time::Tm,
-    status: u32,
+    status: u16,
     response_size: u32,
 }
 
@@ -27,8 +27,8 @@ impl LogEntry {
         return entry
     }
 
-    pub fn done<R>(&mut self, _: &Response<R>) where R: Read {
-        self.status = 0; // statuscode is not accessible :(
+    pub fn done<R>(&mut self, _: &Response<R>, status_code: u16) where R: Read {
+        self.status = status_code; // request.statuscode is not accessible :(
         self.print();
     }
 

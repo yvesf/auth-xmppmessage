@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration as StdDuration;
 
+use apachelog::LogEntry;
 use sendxmpp;
 use time::{get_time, Duration as TimeDuration};
 use token;
@@ -16,7 +17,7 @@ use message::format_message;
 
 use ascii::AsciiString;
 use tiny_http::{Request, Response, StatusCode, Header, HeaderField};
-use rustc_serialize::base64::FromBase64;
+use rustc_serialize::base64::{FromBase64};
 
 pub struct HeaderInfos {
     auth_username: String,
@@ -31,7 +32,8 @@ pub struct AuthHandler {
     valid_tokens_cache: Arc<RwLock<HashMap<String, i64>>>,
     tg: token::TokenGenerator,
     last_interactive_request: Cell<i64>,
-    nosend: bool
+    nosend: bool,
+    authenticate_header: Header
 }
 
 type EmptyResponse = Response<io::Empty>;
@@ -57,7 +59,11 @@ impl AuthHandler {
             valid_tokens_cache: Arc::new(RwLock::new(HashMap::new())),
             tg: token::TokenGenerator::new(validity.num_seconds(), secret),
             last_interactive_request: Cell::new(0),
-            nosend: nosend
+            nosend: nosend,
+            authenticate_header: Header {
+                field: HeaderField::from_bytes(http_header_www_authenticate!()).unwrap(),
+                value: AsciiString::from_str(r#"Basic realm="xmppmessage auth""#).unwrap()
+            }
         }
     }
 
@@ -75,7 +81,7 @@ impl AuthHandler {
     }
 
     #[inline(always)]
-    fn _parse_headers<'a>(headers: &'a [Header]) -> Result<HeaderInfos, &'static str> {
+    fn parse_headers(headers: &[Header]) -> Result<HeaderInfos, &'static str> {
         let auth_header = get_header!(headers, http_header_authorization!())?.value.as_str();
         debug!("{}: {}", http_header_authorization!(), auth_header);
         let (auth_method, encoded_cred) = match auth_header.find(' ') {
@@ -83,17 +89,21 @@ impl AuthHandler {
             None => Err("Failed to split Authorization header")
         }.map(|(header, pos)| header.split_at(pos))?;
 
-        let decoded_cred = encoded_cred.from_base64().or(Err("Failed base64 decode of username/password"))?;
-        let (username, password) = str::from_utf8(&decoded_cred).or(Err("Failed to decode UTF-8"))
+        let decoded_cred = encoded_cred.trim().from_base64()
+            .or(Err("Failed to decode base64 of username/password"))?;
+
+        let (username, password) = str::from_utf8(&decoded_cred)
+            .or(Err("Failed to decode UTF-8 of username/password"))
             .map(|value| match value.find(':') {
                 Some(pos) => Ok((value, pos)),
                 None => Err("Failed to split username/password")
             })?
-            .map(|(value, pos)| value.split_at(pos))?;
+            .map(|(value, pos)| value.split_at(pos))
+            .map(|(username, colon_password)| (username, colon_password.split_at(1).1))?;
 
-        let allowed_jids_value = get_header!(headers, http_header_x_allowed_jid!())?.value.as_str();
-        debug!("{}: {}", http_header_x_allowed_jid!(), allowed_jids_value);
-        let allowed_jids_list = allowed_jids_value.split(',').map(String::from).collect();
+        let allowed_jids_header = get_header!(headers, http_header_x_allowed_jid!())?.value.as_str();
+        debug!("{}: {}", http_header_x_allowed_jid!(), allowed_jids_header);
+        let allowed_jids_list = allowed_jids_header.split(',').map(String::from).collect();
 
         Ok(HeaderInfos {
             auth_username: String::from(username),
@@ -103,56 +113,51 @@ impl AuthHandler {
         })
     }
 
-    fn authenticate_response(status_code: u16) -> io::Result<EmptyResponse> {
-        Ok(Response::new(
+    fn authenticate_response(&self, status_code: u16) -> io::Result<(u16, EmptyResponse)> {
+        Ok((status_code, Response::new(
             StatusCode(status_code),
-            vec![
-            Header {
-                field: HeaderField::from_bytes(http_header_www_authenticate!()).unwrap(),
-                value: AsciiString::from_str(r#"Basic realm="xmppmessage auth""#).unwrap()
-            }
-            ],
+            vec![self.authenticate_header.clone()],
             io::empty(), None, None
-        ))
+        )))
     }
 
-    fn _call_internal(&self, request: &Request) -> io::Result<EmptyResponse> {
+    fn _call_internal(&self, request: &Request) -> io::Result<(u16, EmptyResponse)> {
         let current_time = get_time().sec;
-        return match AuthHandler::_parse_headers(request.headers()) {
+        return match AuthHandler::parse_headers(request.headers()) {
             Ok(headerinfos) => {
                 let is_known_user = headerinfos.allowed_jids.contains(&headerinfos.auth_username);
                 if headerinfos.auth_method != "Basic" {
-                    error!("Invalid authentication method. Responding with 405");
-                    return AuthHandler::authenticate_response(405) // Method not allowed
+                    error!("Invalid authentication method");
+                    return self.authenticate_response(405) // Method not allowed
                 } else if headerinfos.auth_username.len() > 0 && headerinfos.auth_password.len() == 0 {
                     // Request new token
                     if current_time - self.last_interactive_request.get() < 2 {
                         // If last error was not longer then 2 second ago then sleep
                         info!("Too many invalid token-requests, sleep 5 seconds");
                         thread::sleep(StdDuration::from_secs(5));
-                        return AuthHandler::authenticate_response(429) //  Too many requests
+                        return self.authenticate_response(429) //  Too many requests
                     } else {
                         self.last_interactive_request.set(current_time);
                         if is_known_user {
                             self.send_message(&headerinfos.auth_username);
                         }
-                        return AuthHandler::authenticate_response(401) //Token sent, retry now
+                        return self.authenticate_response(401) //Token sent, retry now
                     }
                 } else {
                     match self.verify(&headerinfos) {
                         Ok(true) => {
                             if is_known_user {
-                                return Ok(Response::empty(200)) // Ok
+                                return Ok((200, Response::empty(200))) // Ok
                             } else {
                                 self.last_interactive_request.set(current_time);
-                                return AuthHandler::authenticate_response(401) // invalid password
+                                return self.authenticate_response(401) // invalid password
                             }
                         },
                         Ok(false) => {
                             if current_time - self.last_interactive_request.get() < 2 {
                                 // If last error was not longer then 2 seconds ago then sleep 5 seconds
                                 thread::sleep(StdDuration::from_secs(5));
-                                return Ok(Response::empty(429)) // Too Many Requests
+                                return Ok((428, Response::empty(429))) // Too Many Requests
                             } else {
                                 self.last_interactive_request.set(current_time);
                                 // in this case we use the chance to delete outdated cache entries
@@ -160,7 +165,7 @@ impl AuthHandler {
                                     Ok(num) => debug!("Removed {} cache entries", num),
                                     Err(e) => error!("{}", e),
                                 };
-                                return AuthHandler::authenticate_response(401) // Authentication failed, username or password wrong
+                                return self.authenticate_response(401) // Authentication failed, username or password wrong
                             }
                         },
                         Err(msg) => {
@@ -171,8 +176,8 @@ impl AuthHandler {
                 }
             },
             Err(e) => {
-                info!("Error: {}. Responding with 401", e);
-                return AuthHandler::authenticate_response(401) // No Authorization header
+                info!("Error: {}", e);
+                return self.authenticate_response(401) // No Authorization header
             },
         };
     }
@@ -234,10 +239,14 @@ impl AuthHandler {
 
     #[inline(always)]
     pub fn call(&self, request: &Request) -> Response<io::Empty> {
-        self._call_internal(request).unwrap_or_else(|err: io::Error| {
+        let mut log = LogEntry::start(&request);
+        let (status_code, response) = self._call_internal(request).unwrap_or_else(|err: io::Error| {
             error!("{}", err);
-            Response::empty(500)
-        })
+            (500, Response::empty(500))
+        });
+        log.done(&response, status_code);
+
+        return response;
     }
 }
 
@@ -245,8 +254,29 @@ unsafe impl Sync for AuthHandler {}
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
+
     use time::{Duration as TimeDuration};
+    use ascii::AsciiString;
+    use tiny_http::{Header, HeaderField};
+    use rustc_serialize::base64::{MIME, ToBase64};
+
+    macro_rules! assert_error_starts_with {
+    ($result:expr, $pattern:expr) => {{
+            assert!($result.is_err(), "Must be error");
+            let msg = $result.err().unwrap();
+            assert!(msg.starts_with($pattern),
+                    "Error message '{}' does not start with '{}",
+                    msg, $pattern);
+        }}
+    }
+
+    macro_rules! assert_is_ok {
+        ($result:expr) => (assert!($result.is_ok(), "Result not is_ok(): {}", $result.err().unwrap()));
+    }
+
 
     #[test]
     fn test_handler_creation() {
@@ -258,5 +288,61 @@ mod tests {
         assert_eq!(handler.bot_password, "pw");
         assert_eq!(handler.tg.valid_duration_secs, 60 * 60 * 123);
         assert_eq!(handler.nosend, true);
+    }
+
+    #[test]
+    fn test_parse_headers1() {
+        let result = AuthHandler::parse_headers(&[Header {
+            field: HeaderField::from_bytes(http_header_authorization!()).unwrap(),
+            value: AsciiString::from_str(r#"adsasdasd"#).unwrap()
+        }]);
+        assert_error_starts_with!(result, "Failed to split Authorization header");
+    }
+
+    #[test]
+    fn test_parse_headers2() {
+        let result = AuthHandler::parse_headers(&[Header {
+            field: HeaderField::from_bytes(http_header_authorization!()).unwrap(),
+            value: AsciiString::from_str("adsasdasd AB$$").unwrap()
+        }]);
+        assert_error_starts_with!(result, "Failed to decode base64");
+    }
+
+    #[test]
+    fn test_parse_headers3() {
+        let header_value = String::from("methodname ") + &(b"adfasdasd".to_base64(MIME));
+        let result = AuthHandler::parse_headers(&[Header {
+            field: HeaderField::from_bytes(http_header_authorization!()).unwrap(),
+            value: AsciiString::from_str(&header_value).unwrap()
+        }]);
+        assert_error_starts_with!(result, "Failed to split username");
+    }
+
+    #[test]
+    fn test_parse_headers4() {
+        let header_value = String::from("methodname ") + &(b"adfasdasd:asdfasd".to_base64(MIME));
+        let result = AuthHandler::parse_headers(&[Header {
+            field: HeaderField::from_bytes(http_header_authorization!()).unwrap(),
+            value: AsciiString::from_str(&header_value).unwrap()
+        }]);
+        assert_error_starts_with!(result, "No Header found named: 'X-A");
+    }
+
+    #[test]
+    fn test_parse_headers5() {
+        let header_value = String::from("methodname ") + &(b"adfasdasd:password".to_base64(MIME));
+        let result = AuthHandler::parse_headers(&[Header {
+            field: HeaderField::from_bytes(http_header_authorization!()).unwrap(),
+            value: AsciiString::from_str(&header_value).unwrap()
+        }, Header {
+            field: HeaderField::from_bytes(http_header_x_allowed_jid!()).unwrap(),
+            value: AsciiString::from_str("foo@bar,bla@bla.com").unwrap()
+        }]);
+        assert_is_ok!(result);
+        let headerinfos = result.unwrap();
+        assert_eq!(vec!["foo@bar", "bla@bla.com"], headerinfos.allowed_jids);
+        assert_eq!("adfasdasd", headerinfos.auth_username);
+        assert_eq!("password", headerinfos.auth_password);
+        assert_eq!("methodname", headerinfos.auth_method);
     }
 }
