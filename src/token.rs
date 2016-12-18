@@ -24,8 +24,9 @@ impl TokenGenerator {
     /// Return (from, to, token)
     pub fn generate_token(&self, username: &str, at_time: i64) -> (i64, i64, String) {
         let timeslot = at_time - (at_time % self.valid_duration_secs);
-        let input: String = format!("{}{}", username, timeslot);
-        return (timeslot, timeslot + self.valid_duration_secs, self.make_hash_token(&input.as_bytes()))
+        let input = format!("{}{}", username, timeslot);
+        let token = self.make_hash_token(&input.as_bytes());
+        return (timeslot, timeslot + self.valid_duration_secs, token)
     }
 
     #[inline(always)]
@@ -64,7 +65,7 @@ mod tests {
     fn test_generate_token() {
         use time;
         let tg = TokenGenerator::new(time::Duration::hours(2).num_seconds(),
-                                     vec!(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16));
+                                     vec!(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16));
         let (valid_from, valid_until, result) = tg.generate_token("a", 99999999);
         assert_eq!( valid_from, 99993600);
         assert_eq!( valid_until, 100000800);

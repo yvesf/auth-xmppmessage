@@ -28,7 +28,7 @@ Options:
             proxy_pass http://127.0.0.1:8081/; # --port PORT
             proxy_pass_request_body off;
             proxy_set_header Content-Length "";
-            proxy_set_header X-Original-URI "$scheme://$host$request_uri";
+            proxy_set_header X-Original-Url "$scheme://$host$request_uri";
             proxy_set_header X-Allowed-Jid "JID1,JID2";
         }
 

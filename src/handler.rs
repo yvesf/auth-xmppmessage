@@ -2,7 +2,6 @@ use std::cell::Cell;
 use std::collections::{HashMap};
 use std::io;
 use std::marker::Sync;
-use std::ops::Add;
 use std::str;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -23,7 +22,8 @@ pub struct HeaderInfos {
     auth_username: String,
     auth_password: String,
     auth_method: String,
-    allowed_jids: Vec<String>
+    allowed_jids: Vec<String>,
+    original_url: Option<String>
 }
 
 pub struct AuthHandler {
@@ -41,6 +41,7 @@ type EmptyResponse = Response<io::Empty>;
 // HTTP Statuscodes defined as macro. This way they can be used like literals.
 macro_rules! http_header_authorization { () => (r"Authorization") }
 macro_rules! http_header_x_allowed_jid { () => (r"X-Allowed-Jid") }
+macro_rules! http_header_x_original_url { () => (r"X-Original-Url") }
 macro_rules! http_header_www_authenticate { () => (r"WWW-Authenticate") }
 
 // Finds a header in a `tiny_http::Header` structure.
@@ -67,11 +68,12 @@ impl AuthHandler {
         }
     }
 
-    fn send_message(&self, user_jid: &str) {
+    fn send_message(&self, headerinfos: &HeaderInfos) {
+        let user_jid = &headerinfos.auth_username;
         let (valid_from, valid_until, token) = self.tg.generate_token(user_jid, get_time().sec);
-        let message = format_message(token, valid_from, valid_until);
+        let message = format_message(user_jid, token, valid_from, valid_until, headerinfos.original_url.clone());
         if self.nosend {
-            error!("Would send to {} message: {}", user_jid, message);
+            error!("Would send to {} message: {}", headerinfos.auth_username, message);
         } else {
             if sendxmpp::send_message(self.bot_jid.as_str(), self.bot_password.as_str(),
                                       message.as_str(), user_jid).is_err() {
@@ -105,11 +107,15 @@ impl AuthHandler {
         debug!("{}: {}", http_header_x_allowed_jid!(), allowed_jids_header);
         let allowed_jids_list = allowed_jids_header.split(',').map(String::from).collect();
 
+        let original_url = get_header!(headers, http_header_x_original_url!())
+            .map(|v| v.value.to_string()).ok();
+
         Ok(HeaderInfos {
             auth_username: String::from(username),
             auth_password: String::from(password),
             auth_method: String::from(auth_method),
             allowed_jids: allowed_jids_list,
+            original_url: original_url
         })
     }
 
@@ -139,7 +145,7 @@ impl AuthHandler {
                     } else {
                         self.last_interactive_request.set(current_time);
                         if is_known_user {
-                            self.send_message(&headerinfos.auth_username);
+                            self.send_message(&headerinfos);
                         }
                         return self.authenticate_response(401) //Token sent, retry now
                     }
@@ -195,7 +201,7 @@ impl AuthHandler {
     fn verify(&self, headerinfos: &HeaderInfos) -> Result<bool, &'static str> {
         let pw_token = token::normalize_token(&headerinfos.auth_password);
         let guard = self.valid_tokens_cache.clone();
-        let key = headerinfos.auth_username.clone().add(":").add(pw_token.as_str());
+        let key = headerinfos.auth_username.clone() + ":"  + pw_token.as_str();
         let current_time = get_time().sec;
 
         // try cache:

@@ -12,6 +12,7 @@ extern crate time;
 extern crate rand;
 extern crate rustc_serialize;
 extern crate simple_logger;
+extern crate url;
 
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;

@@ -7,6 +7,7 @@ build = "build.rs"
 [dependencies]
 ascii = "0.7"
 tiny_http = "0.5"
+url = "0.2"
 rustc-serialize = "0.3"
 time = "0.1"
 rust-crypto = "0.2"
